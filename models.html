@@ -1,0 +1,438 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Weather Model Comparison</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="icon" href="favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="viz-root" id="vizRoot">
+  <div class="top-links">
+    <a class="link-btn primary" id="mostLikelyLink" href="index.html">Most likely forecast →</a>
+    <button class="theme-toggle" id="themeToggle">Dark mode</button>
+  </div>
+  <h1>Hourly Forecast Model Comparison</h1>
+  <p class="subtitle" id="subtitle">Loading…</p>
+
+  <div class="controls">
+    <div class="location-wrap">
+      <label>Location <input type="text" id="locationInput" placeholder="Search city…" autocomplete="off"></label>
+      <div class="location-results" id="locationResults"></div>
+    </div>
+    <button class="quick-btn" id="useMyLocationBtn">Use my location</button>
+    <label>Date <input type="date" id="dateInput"></label>
+    <button class="quick-btn" id="todayBtn">Today</button>
+    <button class="quick-btn" id="tomorrowBtn">Tomorrow</button>
+    <span class="status-msg" id="statusMsg"></span>
+  </div>
+
+  <div class="stat-row" id="statRow"></div>
+
+  <div id="chartsContainer"></div>
+
+  <button class="toggle-table-btn" id="toggleTable">Show data table</button>
+  <div class="table-wrap" id="tableWrap"></div>
+
+  <p class="foot-note">
+    Sources: National Weather Service (api.weather.gov NDFD, US locations only) and the GFS, ECMWF IFS, ICON, UKMO
+    and GEM models via Open-Meteo (open-meteo.com), plus Open-Meteo's own "best match" blend. Data is fetched live,
+    client-side, on every visit — nothing is hardcoded, and results are cached in your browser for 10 minutes so
+    switching dates or opening the "most likely" view stays fast. Forecast models generally only cover roughly the
+    next 1–16 days (varies by model) and a limited window of recent history. Consumer sites (Weather.com,
+    AccuWeather, Weather Underground, etc.) were checked but render forecasts via JavaScript that can't be scraped
+    headlessly — they re-package these same underlying models rather than offering independent data, so this
+    comparison queries the models directly.
+  </p>
+
+  <div class="tooltip" id="tooltip"></div>
+</div>
+
+<script src="weather-core.js"></script>
+<script>
+var WC = WeatherCore;
+var root = document.getElementById('vizRoot');
+function colorFor(slot) { return getComputedStyle(root).getPropertyValue('--series-' + slot).trim(); }
+
+var state = { lat: null, lon: null, name: null, date: null };
+var DATA = {};
+
+// ---------- build the 6 field chart cards once ----------
+var chartsContainer = document.getElementById('chartsContainer');
+WC.FIELDS.forEach(function (f) {
+  var card = document.createElement('div');
+  card.className = 'card';
+  card.innerHTML =
+    '<h2>' + f.label + '</h2>' +
+    '<p class="card-sub" id="sub-' + f.key + '"></p>' +
+    '<div class="legend" id="legend-' + f.key + '"></div>' +
+    '<svg id="chart-' + f.key + '" viewBox="0 0 920 260" preserveAspectRatio="xMidYMid meet"></svg>';
+  chartsContainer.appendChild(card);
+});
+
+// ---------- legend ----------
+function buildLegend(el, sources) {
+  el.innerHTML = '';
+  sources.forEach(function (s) {
+    var item = document.createElement('div'); item.className = 'legend-item';
+    var key = document.createElement('span'); key.className = 'legend-key';
+    key.style.background = colorFor(s.slot);
+    var label = document.createElement('span'); label.textContent = s.name;
+    item.append(key, label);
+    el.appendChild(item);
+  });
+}
+
+// ---------- chart builder ----------
+var NS = 'http://www.w3.org/2000/svg';
+function el(tag, attrs) {
+  var e = document.createElementNS(NS, tag);
+  for (var k in attrs) e.setAttribute(k, attrs[k]);
+  return e;
+}
+function niceMax(v, step) { return Math.ceil(v / step) * step; }
+function niceMin(v, step) { return Math.floor(v / step) * step; }
+
+function buildChart(svgEl, sources, field) {
+  svgEl.innerHTML = '';
+  var allVals = [];
+  sources.forEach(function (s) { DATA[s.key][field.key].forEach(function (v) { if (v !== null && v !== undefined) allVals.push(v); }); });
+  if (!allVals.length) return null;
+
+  var W = Math.max(280, Math.round(svgEl.getBoundingClientRect().width)) || 920;
+  var H = Math.max(160, Math.min(300, Math.round(W * 260 / 920)));
+  var M = { top: 10, right: 14, bottom: 26, left: 38 };
+  var plotW = W - M.left - M.right;
+  var plotH = H - M.top - M.bottom;
+
+  var yMin = field.yMin !== undefined ? field.yMin : niceMin(Math.min.apply(null, allVals), field.step);
+  var yMax = field.yMax !== undefined ? field.yMax : niceMax(Math.max.apply(null, allVals), field.step);
+  if (yMax - yMin < field.step * 2) yMax = yMin + field.step * 4;
+
+  var xScale = function (i) { return M.left + (i / (WC.HOURS.length - 1)) * plotW; };
+  var yScale = function (v) { return M.top + plotH - ((v - yMin) / (yMax - yMin)) * plotH; };
+
+  svgEl.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+
+  var ticks = [];
+  for (var t = yMin; t <= yMax + 0.001; t += field.step) ticks.push(t);
+  ticks.forEach(function (t) {
+    var y = yScale(t);
+    svgEl.appendChild(el('line', { class: 'gridline', x1: M.left, x2: W - M.right, y1: y, y2: y }));
+    var lbl = el('text', { class: 'axis-label', x: M.left - 8, y: y + 3, 'text-anchor': 'end' });
+    lbl.textContent = Math.round(t) + (field.unit === '%' ? '%' : field.unit === '°F' ? '°' : '');
+    svgEl.appendChild(lbl);
+  });
+
+  WC.HOURS.forEach(function (h, i) {
+    if (i % 3 !== 0) return;
+    var x = xScale(i);
+    var lbl = el('text', { class: 'axis-label', x: x, y: H - M.bottom + 16, 'text-anchor': 'middle' });
+    lbl.textContent = h;
+    svgEl.appendChild(lbl);
+  });
+  svgEl.appendChild(el('line', { class: 'axis-line', x1: M.left, x2: W - M.right, y1: H - M.bottom, y2: H - M.bottom }));
+
+  sources.forEach(function (s) {
+    var vals = DATA[s.key][field.key];
+    if (!WC.hasAny(vals)) return;
+    var d = '', drawing = false;
+    vals.forEach(function (v, i) {
+      if (v === null || v === undefined) { drawing = false; return; }
+      var x = xScale(i), y = yScale(v);
+      d += (drawing ? 'L' : 'M') + x.toFixed(1) + ',' + y.toFixed(1) + ' ';
+      drawing = true;
+    });
+    svgEl.appendChild(el('path', { class: 'series-line', d: d.trim(), stroke: colorFor(s.slot) }));
+    for (var i = vals.length - 1; i >= 0; i--) {
+      if (vals[i] !== null && vals[i] !== undefined) {
+        svgEl.appendChild(el('circle', { class: 'end-dot', cx: xScale(i), cy: yScale(vals[i]), r: 4, fill: colorFor(s.slot) }));
+        break;
+      }
+    }
+  });
+
+  return { xScale: xScale, yScale: yScale, M: M, plotW: plotW, plotH: plotH, W: W, H: H };
+}
+
+// ---------- crosshair + tooltip ----------
+var tooltip = document.getElementById('tooltip');
+var activeHide = null;
+document.addEventListener('pointerdown', function (e) {
+  if (activeHide && !e.target.closest('.hit-layer')) { activeHide(); activeHide = null; }
+}, true);
+function attachHover(svgEl, geom, sources) {
+  if (!geom) return;
+  var hit = el('rect', { class: 'hit-layer', x: geom.M.left, y: geom.M.top, width: geom.plotW, height: geom.plotH });
+  svgEl.appendChild(hit);
+  var cross = el('line', { class: 'crosshair', x1: 0, x2: 0, y1: geom.M.top, y2: geom.H - geom.M.bottom, visibility: 'hidden' });
+  svgEl.appendChild(cross);
+
+  function onMove(evt) {
+    var rect = svgEl.getBoundingClientRect();
+    var scaleX = geom.W / rect.width;
+    var localX = (evt.clientX - rect.left) * scaleX;
+    var idx = Math.round(((localX - geom.M.left) / geom.plotW) * (WC.HOURS.length - 1));
+    idx = Math.max(0, Math.min(WC.HOURS.length - 1, idx));
+    var x = geom.xScale(idx);
+    cross.setAttribute('x1', x); cross.setAttribute('x2', x);
+    cross.setAttribute('visibility', 'visible');
+
+    tooltip.innerHTML = '';
+    var hourEl = document.createElement('div'); hourEl.className = 't-hour'; hourEl.textContent = WC.HOURS[idx];
+    tooltip.appendChild(hourEl);
+    sources.forEach(function (s) {
+      var t = DATA[s.key].temp[idx];
+      var w = DATA[s.key].wind[idx];
+      var p = DATA[s.key].precip[idx];
+      if (t === null && w === null && p === null) return;
+      var row = document.createElement('div'); row.className = 'tooltip-row';
+      var key = document.createElement('span'); key.className = 'tooltip-key'; key.style.background = colorFor(s.slot);
+      var name = document.createElement('span'); name.className = 'tooltip-name'; name.textContent = s.name;
+      var c = DATA[s.key].cond[idx];
+      var val = document.createElement('span'); val.className = 'tooltip-val';
+      var parts = [];
+      if (t !== null && t !== undefined) parts.push(t + '°F');
+      if (p !== null && p !== undefined) parts.push(p + '%');
+      if (w !== null && w !== undefined) parts.push(w + 'mph');
+      if (c) parts.push(c);
+      val.textContent = parts.join(' · ') || '—';
+      row.append(key, name, val);
+      tooltip.appendChild(row);
+    });
+
+    tooltip.classList.add('show');
+    positionTooltip(evt);
+    activeHide = onLeave;
+  }
+  function onLeave() { cross.setAttribute('visibility', 'hidden'); tooltip.classList.remove('show'); }
+  hit.addEventListener('pointermove', onMove);
+  hit.addEventListener('pointerdown', onMove);
+  hit.addEventListener('pointerleave', onLeave);
+}
+
+function positionTooltip(evt) {
+  var rootRect = root.getBoundingClientRect();
+  var left = evt.clientX - rootRect.left + 16;
+  var top = evt.clientY - rootRect.top - 10;
+  var maxLeft = rootRect.width - tooltip.offsetWidth - 8;
+  tooltip.style.left = Math.max(4, Math.min(left, maxLeft)) + 'px';
+  tooltip.style.top = Math.max(4, top) + 'px';
+}
+
+// ---------- stats ----------
+function buildStats(availTemp, availPrecip, availWind, availGust, availUv) {
+  var row = document.getElementById('statRow');
+  row.innerHTML = '';
+  if (!availTemp.length) {
+    row.innerHTML = '<div class="stat-tile"><div class="stat-label">No data</div><div class="stat-note">No model returned data for this date/location.</div></div>';
+    return;
+  }
+  var tiles = [];
+
+  var highs = availTemp.map(function (s) { return Math.max.apply(null, DATA[s.key].temp.filter(function (v) { return v !== null; })); });
+  var lows = availTemp.map(function (s) { return Math.min.apply(null, DATA[s.key].temp.filter(function (v) { return v !== null; })); });
+  var avgHigh = Math.round(highs.reduce(function (a, b) { return a + b; }, 0) / highs.length);
+  var avgLow = Math.round(lows.reduce(function (a, b) { return a + b; }, 0) / lows.length);
+  tiles.push({ label: 'Consensus high', value: avgHigh + '°F', note: 'range: ' + Math.min.apply(null, highs) + '–' + Math.max.apply(null, highs) + '°F (' + availTemp.length + ' models)' });
+  tiles.push({ label: 'Consensus low', value: avgLow + '°F', note: 'overnight low, all models' });
+
+  if (availPrecip.length) {
+    var peaks = availPrecip.map(function (s) { return Math.max.apply(null, DATA[s.key].precip.filter(function (v) { return v !== null; })); });
+    var avgPeak = Math.round(peaks.reduce(function (a, b) { return a + b; }, 0) / peaks.length);
+    tiles.push({ label: 'Peak rain chance', value: avgPeak + '%', note: 'avg of per-model peaks (' + availPrecip.length + ' models)' });
+  } else {
+    tiles.push({ label: 'Peak rain chance', value: '—', note: 'no model returned precip data' });
+  }
+
+  if (availGust.length) {
+    var gustPeaks = availGust.map(function (s) { return Math.max.apply(null, DATA[s.key].gust.filter(function (v) { return v !== null; })); });
+    var avgGustPeak = Math.round(gustPeaks.reduce(function (a, b) { return a + b; }, 0) / gustPeaks.length);
+    tiles.push({ label: 'Peak wind gust', value: avgGustPeak + ' mph', note: 'avg of per-model peaks (' + availGust.length + ' models)' });
+  } else if (availWind.length) {
+    var windPeaks = availWind.map(function (s) { return Math.max.apply(null, DATA[s.key].wind.filter(function (v) { return v !== null; })); });
+    var avgWindPeak = Math.round(windPeaks.reduce(function (a, b) { return a + b; }, 0) / windPeaks.length);
+    tiles.push({ label: 'Peak wind speed', value: avgWindPeak + ' mph', note: 'avg of per-model peaks (' + availWind.length + ' models)' });
+  } else {
+    tiles.push({ label: 'Peak wind', value: '—', note: 'no model returned wind data' });
+  }
+
+  if (availUv.length) {
+    var uvPeaks = availUv.map(function (s) { return Math.max.apply(null, DATA[s.key].uv.filter(function (v) { return v !== null; })); });
+    var avgUvPeak = Math.round((uvPeaks.reduce(function (a, b) { return a + b; }, 0) / uvPeaks.length) * 10) / 10;
+    tiles.push({ label: 'Peak UV index', value: avgUvPeak, note: 'avg of per-model peaks (' + availUv.length + ' models)' });
+  } else {
+    tiles.push({ label: 'Peak UV index', value: '—', note: 'no model returned UV data' });
+  }
+
+  tiles.forEach(function (t) {
+    var div = document.createElement('div'); div.className = 'stat-tile';
+    var l = document.createElement('div'); l.className = 'stat-label'; l.textContent = t.label;
+    var v = document.createElement('div'); v.className = 'stat-value'; v.textContent = t.value;
+    var n = document.createElement('div'); n.className = 'stat-note'; n.textContent = t.note;
+    div.append(l, v, n);
+    row.appendChild(div);
+  });
+}
+
+// ---------- table ----------
+function buildTable(sources) {
+  var wrap = document.getElementById('tableWrap');
+  wrap.innerHTML = '';
+  var table = document.createElement('table');
+  var thead = document.createElement('thead');
+  var hr = document.createElement('tr');
+  hr.appendChild(document.createElement('th'));
+  sources.forEach(function (s) {
+    var th = document.createElement('th'); th.colSpan = WC.FIELDS.length + 1; th.textContent = s.name;
+    hr.appendChild(th);
+  });
+  thead.appendChild(hr);
+  var hr2 = document.createElement('tr');
+  var thHour = document.createElement('th'); thHour.textContent = 'Hour'; hr2.appendChild(thHour);
+  sources.forEach(function () {
+    WC.FIELDS.concat([{ shortLabel: 'Cond' }]).forEach(function (f) {
+      var th = document.createElement('th'); th.textContent = f.shortLabel; th.style.fontWeight = '400'; th.style.fontSize = '10.5px';
+      hr2.appendChild(th);
+    });
+  });
+  thead.appendChild(hr2);
+  table.appendChild(thead);
+
+  var tbody = document.createElement('tbody');
+  WC.HOURS.forEach(function (h, i) {
+    var row = document.createElement('tr');
+    var tdH = document.createElement('td'); tdH.textContent = h; row.appendChild(tdH);
+    sources.forEach(function (s) {
+      WC.FIELDS.forEach(function (f) {
+        var v = DATA[s.key][f.key][i];
+        var td = document.createElement('td'); td.textContent = (v === null || v === undefined) ? '—' : v;
+        row.appendChild(td);
+      });
+      var td3 = document.createElement('td'); td3.textContent = DATA[s.key].cond[i] || '—'; td3.style.textAlign = 'left';
+      row.appendChild(td3);
+    });
+    tbody.appendChild(row);
+  });
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+}
+
+function showNoDataMsg(parent, svgEl, msg) {
+  svgEl.style.display = 'none';
+  var div = document.createElement('div'); div.className = 'no-data-msg'; div.textContent = msg; div.dataset.noDataMsg = 'true';
+  parent.appendChild(div);
+}
+function removeNoDataMsg(parent) {
+  var existing = parent.querySelector('[data-no-data-msg]'); if (existing) existing.remove();
+  var svgEl = parent.querySelector('svg'); if (svgEl) svgEl.style.display = '';
+}
+
+// ---------- render pipeline ----------
+function renderAll() {
+  var availByField = {};
+  WC.FIELDS.forEach(function (f) { availByField[f.key] = WC.SOURCES.filter(function (s) { return WC.hasAny(DATA[s.key][f.key]); }); });
+  var availTemp = availByField.temp;
+  var unavailable = WC.SOURCES.filter(function (s) { return !WC.hasAny(DATA[s.key].temp); }).map(function (s) { return s.name; });
+
+  document.getElementById('subtitle').textContent =
+    state.name + ' — ' + WC.friendlyDate(state.date) + ' — ' + availTemp.length + ' of 7 models have data' +
+    (unavailable.length ? ' (missing: ' + unavailable.join(', ') + ')' : '');
+
+  buildStats(availTemp, availByField.precip, availByField.wind, availByField.gust, availByField.uv);
+
+  WC.FIELDS.forEach(function (f) {
+    var avail = availByField[f.key];
+    document.getElementById('sub-' + f.key).textContent =
+      (f.unit ? f.unit + ', ' : '') + 'by hour — ' + avail.length + ' model' + (avail.length === 1 ? '' : 's');
+    buildLegend(document.getElementById('legend-' + f.key), avail);
+
+    var svgEl = document.getElementById('chart-' + f.key);
+    var parent = svgEl.parentElement;
+    removeNoDataMsg(parent);
+    var geom = buildChart(svgEl, avail, f);
+    if (!geom) showNoDataMsg(parent, svgEl, 'No ' + f.label.toLowerCase() + ' data available for this date/location.');
+    else attachHover(svgEl, geom, avail);
+  });
+
+  buildTable(availTemp);
+}
+
+// ---------- load orchestration ----------
+var loadSeq = 0;
+async function loadAndRender() {
+  var mySeq = ++loadSeq;
+  var status = document.getElementById('statusMsg');
+  status.textContent = 'Loading forecast…';
+  status.className = 'status-msg loading';
+  try {
+    var data = await WC.loadData(state.lat, state.lon, state.date);
+    if (mySeq !== loadSeq) return;
+    DATA = data;
+    renderAll();
+    status.textContent = 'Updated ' + new Date().toLocaleTimeString();
+    status.className = 'status-msg';
+  } catch (e) {
+    if (mySeq !== loadSeq) return;
+    console.error(e);
+    status.textContent = 'Failed to load forecast data.';
+    status.className = 'status-msg error';
+  }
+}
+
+document.getElementById('toggleTable').addEventListener('click', function () {
+  var wrap = document.getElementById('tableWrap');
+  wrap.classList.toggle('show');
+  this.textContent = wrap.classList.contains('show') ? 'Hide data table' : 'Show data table';
+});
+
+// ---------- theme toggle (repaints the whole page via :root, see style.css) ----------
+var themeBtn = document.getElementById('themeToggle');
+themeBtn.addEventListener('click', function () {
+  var current = document.documentElement.getAttribute('data-theme');
+  var next = current === 'dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  try { localStorage.setItem('wx:theme', next); } catch (e) {}
+  themeBtn.textContent = next === 'dark' ? 'Light mode' : 'Dark mode';
+  if (Object.keys(DATA).length) renderAll();
+});
+(function initTheme() {
+  var saved = null;
+  try { saved = localStorage.getItem('wx:theme'); } catch (e) {}
+  if (saved) {
+    document.documentElement.setAttribute('data-theme', saved);
+    themeBtn.textContent = saved === 'dark' ? 'Light mode' : 'Dark mode';
+  }
+})();
+
+// ---------- location + date controls (shared with index.html) ----------
+var mostLikelyLink = document.getElementById('mostLikelyLink');
+WC.initLocationDateControls({
+  locationInput: document.getElementById('locationInput'),
+  locationResults: document.getElementById('locationResults'),
+  useMyLocationBtn: document.getElementById('useMyLocationBtn'),
+  dateInput: document.getElementById('dateInput'),
+  todayBtn: document.getElementById('todayBtn'),
+  tomorrowBtn: document.getElementById('tomorrowBtn'),
+  statusMsg: document.getElementById('statusMsg'),
+  defaultDate: WC.toDateStr(new Date()),
+  onChange: function (s) {
+    state.lat = s.lat; state.lon = s.lon; state.name = s.name; state.date = s.date;
+    mostLikelyLink.href = 'index.html?lat=' + s.lat.toFixed(4) + '&lon=' + s.lon.toFixed(4) +
+      '&name=' + encodeURIComponent(s.name) + '&date=' + s.date;
+    loadAndRender();
+  }
+});
+
+// ---------- keep charts sized to their actual container width (resize/rotation) ----------
+var resizeTimer = null;
+window.addEventListener('resize', function () {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(function () { if (Object.keys(DATA).length) renderAll(); }, 150);
+});
+</script>
+</body>
+</html>

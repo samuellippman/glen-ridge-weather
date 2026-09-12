@@ -298,6 +298,124 @@ var WeatherCore = (function () {
     });
   }
 
+  // ---------- shared location/date control wiring (used by both pages) ----------
+  // opts: {locationInput, locationResults, useMyLocationBtn, dateInput, todayBtn, tomorrowBtn, statusMsg, defaultDate, onChange(state)}
+  function initLocationDateControls(opts) {
+    var state = { lat: null, lon: null, name: null, date: null };
+
+    function updateUrl() {
+      var url = new URL(window.location.href);
+      url.searchParams.set("lat", state.lat.toFixed(4));
+      url.searchParams.set("lon", state.lon.toFixed(4));
+      url.searchParams.set("name", state.name);
+      url.searchParams.set("date", state.date);
+      history.replaceState(null, "", url);
+    }
+    function commit() {
+      updateUrl();
+      if (opts.onChange) opts.onChange(state);
+    }
+    function setLocation(lat, lon, name) {
+      state.lat = lat; state.lon = lon; state.name = name;
+      if (opts.locationInput) opts.locationInput.value = name;
+      saveLocation({ lat: lat, lon: lon, name: name });
+      commit();
+    }
+    function setDate(dateStr) {
+      state.date = dateStr;
+      if (opts.dateInput) opts.dateInput.value = dateStr;
+      commit();
+    }
+
+    if (opts.locationInput && opts.locationResults) {
+      var searchDebounce = null;
+      opts.locationInput.addEventListener("input", function () {
+        var q = this.value;
+        if (searchDebounce) clearTimeout(searchDebounce);
+        searchDebounce = setTimeout(async function () {
+          if (q.trim().length < 2) { opts.locationResults.classList.remove("show"); return; }
+          try {
+            var results = await searchLocations(q);
+            opts.locationResults.innerHTML = "";
+            if (!results.length) { opts.locationResults.classList.remove("show"); return; }
+            results.forEach(function (r) {
+              var item = document.createElement("div");
+              item.className = "location-result-item";
+              item.textContent = r.display;
+              item.addEventListener("click", function () {
+                opts.locationResults.classList.remove("show");
+                setLocation(r.lat, r.lon, r.display);
+              });
+              opts.locationResults.appendChild(item);
+            });
+            opts.locationResults.classList.add("show");
+          } catch (e) { console.warn("geocode search failed", e); }
+        }, 300);
+      });
+      document.addEventListener("click", function (e) {
+        if (!opts.locationResults.contains(e.target) && e.target !== opts.locationInput) opts.locationResults.classList.remove("show");
+      });
+    }
+
+    if (opts.useMyLocationBtn) {
+      opts.useMyLocationBtn.addEventListener("click", async function () {
+        if (opts.statusMsg) { opts.statusMsg.textContent = "Finding your location…"; opts.statusMsg.className = "status-msg loading"; }
+        var pos = await detectLocation(8000);
+        if (!pos) {
+          if (opts.statusMsg) { opts.statusMsg.textContent = "Could not get device location (denied or unavailable)."; opts.statusMsg.className = "status-msg error"; }
+          return;
+        }
+        var name = await reverseGeocode(pos.lat, pos.lon);
+        setLocation(pos.lat, pos.lon, name);
+      });
+    }
+
+    if (opts.dateInput) opts.dateInput.addEventListener("change", function () { setDate(this.value); });
+    if (opts.todayBtn) opts.todayBtn.addEventListener("click", function () { setDate(toDateStr(new Date())); });
+    if (opts.tomorrowBtn) opts.tomorrowBtn.addEventListener("click", function () { setDate(toDateStr(addDays(new Date(), 1))); });
+
+    var params = new URLSearchParams(window.location.search);
+    var initialDate = params.get("date") || opts.defaultDate || toDateStr(new Date());
+    state.date = initialDate;
+    if (opts.dateInput) opts.dateInput.value = initialDate;
+
+    var lat = parseFloat(params.get("lat"));
+    var lon = parseFloat(params.get("lon"));
+    var name = params.get("name");
+
+    function finishInit(lat, lon, name) {
+      state.lat = lat; state.lon = lon; state.name = name;
+      if (opts.locationInput) opts.locationInput.value = name;
+      updateUrl();
+      if (opts.onChange) opts.onChange(state);
+    }
+
+    if (!isNaN(lat) && !isNaN(lon)) {
+      finishInit(lat, lon, name || (lat.toFixed(3) + ", " + lon.toFixed(3)));
+    } else {
+      var saved = getSavedLocation();
+      if (saved) {
+        finishInit(saved.lat, saved.lon, saved.name);
+      } else {
+        if (opts.locationInput) opts.locationInput.placeholder = "Detecting your location…";
+        detectLocation(6000).then(async function (pos) {
+          if (pos) {
+            var geoName = await reverseGeocode(pos.lat, pos.lon);
+            setLocation(pos.lat, pos.lon, geoName);
+          } else {
+            setLocation(DEFAULT_LOCATION.lat, DEFAULT_LOCATION.lon, DEFAULT_LOCATION.name);
+          }
+        });
+      }
+    }
+
+    return {
+      getState: function () { return state; },
+      setLocation: setLocation,
+      setDate: setDate
+    };
+  }
+
   return {
     DEFAULT_LOCATION: DEFAULT_LOCATION,
     HOURS: HOURS,
@@ -321,7 +439,8 @@ var WeatherCore = (function () {
     hasAny: hasAny,
     getSavedLocation: getSavedLocation,
     saveLocation: saveLocation,
-    detectLocation: detectLocation
+    detectLocation: detectLocation,
+    initLocationDateControls: initLocationDateControls
   };
 })();
 
