@@ -1,0 +1,695 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Glen Ridge, NJ — Hourly Forecast Model Comparison</title>
+<style>
+  .viz-root {
+    color-scheme: light;
+    --surface-1:      #fcfcfb;
+    --page:           #f9f9f7;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --gridline:       #e1e0d9;
+    --axis:           #c3c2b7;
+    --border:         rgba(11,11,11,0.10);
+    --series-1: #2a78d6; /* NWS */
+    --series-2: #eb6834; /* Open-Meteo Best Match */
+    --series-3: #1baf7a; /* GFS */
+    --series-4: #eda100; /* ECMWF */
+    --series-5: #e87ba4; /* ICON */
+    --series-6: #008300; /* UKMO */
+    --series-7: #4a3aa7; /* GEM */
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) .viz-root {
+      color-scheme: dark;
+      --surface-1:      #1a1a19;
+      --page:           #0d0d0d;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --gridline:       #2c2c2a;
+      --axis:           #383835;
+      --border:         rgba(255,255,255,0.10);
+      --series-1: #3987e5;
+      --series-2: #d95926;
+      --series-3: #199e70;
+      --series-4: #c98500;
+      --series-5: #d55181;
+      --series-6: #008300;
+      --series-7: #9085e9;
+    }
+  }
+  :root[data-theme="dark"] .viz-root {
+    color-scheme: dark;
+    --surface-1:      #1a1a19;
+    --page:           #0d0d0d;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #898781;
+    --gridline:       #2c2c2a;
+    --axis:           #383835;
+    --border:         rgba(255,255,255,0.10);
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+    --series-5: #d55181;
+    --series-6: #008300;
+    --series-7: #9085e9;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: var(--page);
+    color: var(--text-primary);
+  }
+  .viz-root { max-width: 1000px; margin: 0 auto; padding: 28px 20px 48px; }
+  h1 { font-size: 20px; margin: 0 0 2px; }
+  .subtitle { color: var(--text-secondary); font-size: 13.5px; margin: 0 0 18px; }
+  .theme-toggle {
+    position: absolute; top: 20px; right: 20px;
+    font: inherit; font-size: 12px; color: var(--text-secondary);
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 6px; padding: 5px 10px; cursor: pointer;
+  }
+
+  .controls {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    margin-bottom: 18px; padding: 12px 14px;
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px;
+  }
+  .controls label { font-size: 13px; color: var(--text-secondary); display: flex; align-items: center; gap: 8px; }
+  .controls input[type="date"] {
+    font: inherit; font-size: 13px; color: var(--text-primary);
+    background: var(--page); border: 1px solid var(--border); border-radius: 6px;
+    padding: 5px 8px;
+  }
+  .controls .quick-btn {
+    font: inherit; font-size: 12px; color: var(--text-secondary);
+    background: var(--page); border: 1px solid var(--border); border-radius: 6px;
+    padding: 5px 10px; cursor: pointer;
+  }
+  .status-msg { font-size: 12px; color: var(--text-muted); }
+  .status-msg.error { color: #d03b3b; }
+
+  .stat-row {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;
+    margin-bottom: 24px;
+  }
+  .stat-tile {
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 10px; padding: 12px 14px;
+  }
+  .stat-label { font-size: 11.5px; color: var(--text-secondary); margin-bottom: 4px; }
+  .stat-value { font-size: 21px; font-weight: 600; }
+  .stat-note { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+
+  .card {
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 12px; padding: 16px 16px 8px; margin-bottom: 16px;
+    position: relative; min-height: 120px;
+  }
+  .card h2 { font-size: 14px; margin: 0 0 2px; }
+  .card .card-sub { font-size: 11.5px; color: var(--text-muted); margin: 0 0 10px; }
+  .no-data-msg { padding: 30px 4px; text-align: center; color: var(--text-muted); font-size: 13px; }
+
+  .legend {
+    display: flex; flex-wrap: wrap; gap: 14px 18px;
+    padding: 4px 4px 14px;
+    font-size: 12px; color: var(--text-secondary);
+  }
+  .legend-item { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .legend-key { width: 16px; height: 2px; border-radius: 1px; flex: none; }
+
+  svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .gridline { stroke: var(--gridline); stroke-width: 1; }
+  .axis-line { stroke: var(--axis); stroke-width: 1; }
+  .axis-label { fill: var(--text-muted); font-size: 10.5px; }
+  .series-line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+  .end-dot { stroke: var(--surface-1); stroke-width: 2; }
+
+  .crosshair { stroke: var(--axis); stroke-width: 1; pointer-events: none; }
+  .hit-layer { fill: transparent; cursor: crosshair; }
+
+  .tooltip {
+    position: absolute; pointer-events: none; z-index: 5;
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 10px; font-size: 12px;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.16);
+    min-width: 190px; visibility: hidden; opacity: 0;
+    transition: opacity 0.08s ease;
+  }
+  .tooltip.show { visibility: visible; opacity: 1; }
+  .tooltip .t-hour { font-weight: 600; margin-bottom: 6px; color: var(--text-primary); }
+  .tooltip-row { display: flex; align-items: center; gap: 6px; padding: 1px 0; }
+  .tooltip-key { width: 12px; height: 2px; flex: none; }
+  .tooltip-name { color: var(--text-secondary); flex: 1; }
+  .tooltip-val { font-weight: 600; color: var(--text-primary); }
+
+  .toggle-table-btn {
+    font: inherit; font-size: 12px; color: var(--text-secondary);
+    background: transparent; border: 1px solid var(--border);
+    border-radius: 6px; padding: 5px 10px; cursor: pointer; margin: 4px 0 20px;
+  }
+  .table-wrap { display: none; overflow-x: auto; margin-bottom: 24px; border: 1px solid var(--border); border-radius: 10px; }
+  .table-wrap.show { display: block; }
+  table { border-collapse: collapse; width: 100%; font-size: 12px; white-space: nowrap; }
+  th, td { padding: 6px 10px; text-align: right; border-bottom: 1px solid var(--gridline); font-variant-numeric: tabular-nums; }
+  th { text-align: right; color: var(--text-secondary); font-weight: 600; background: var(--surface-1); position: sticky; top: 0; }
+  td:first-child, th:first-child { text-align: left; position: sticky; left: 0; background: var(--surface-1); }
+  .foot-note { font-size: 11.5px; color: var(--text-muted); margin-top: 6px; line-height: 1.5; }
+</style>
+</head>
+<body>
+<div class="viz-root" id="vizRoot">
+  <button class="theme-toggle" id="themeToggle">Dark mode</button>
+  <h1>Glen Ridge, NJ — Hourly Forecast Model Comparison</h1>
+  <p class="subtitle" id="subtitle">Loading…</p>
+
+  <div class="controls">
+    <label>Date <input type="date" id="dateInput"></label>
+    <button class="quick-btn" id="todayBtn">Today</button>
+    <button class="quick-btn" id="tomorrowBtn">Tomorrow</button>
+    <span class="status-msg" id="statusMsg"></span>
+  </div>
+
+  <div class="stat-row" id="statRow"></div>
+
+  <div class="card">
+    <h2>Temperature</h2>
+    <p class="card-sub" id="tempSub">°F, by hour</p>
+    <div class="legend" id="legendTemp"></div>
+    <svg id="chartTemp" viewBox="0 0 920 300" preserveAspectRatio="xMidYMid meet"></svg>
+  </div>
+
+  <div class="card">
+    <h2>Precipitation chance</h2>
+    <p class="card-sub" id="precipSub">% probability of precipitation, by hour</p>
+    <div class="legend" id="legendPrecip"></div>
+    <svg id="chartPrecip" viewBox="0 0 920 240" preserveAspectRatio="xMidYMid meet"></svg>
+  </div>
+
+  <button class="toggle-table-btn" id="toggleTable">Show data table</button>
+  <div class="table-wrap" id="tableWrap"></div>
+
+  <p class="foot-note">
+    Sources: National Weather Service (api.weather.gov, NDFD grid OKX 26,45) and the GFS, ECMWF IFS, ICON, UKMO and
+    GEM models via Open-Meteo (open-meteo.com), plus Open-Meteo's own "best match" blend. Data is fetched live from
+    these public APIs every time this page loads — nothing is cached or hardcoded. Forecast models generally only
+    cover roughly the next 1–16 days (varies by model) and a few months of recent history; dates outside a model's
+    range will show as unavailable for that model. Consumer sites (Weather.com, AccuWeather, Weather Underground,
+    etc.) were checked but render forecasts via JavaScript that can't be scraped headlessly — they re-package these
+    same underlying models rather than offering independent data, so this comparison uses the models directly.
+  </p>
+
+  <div class="tooltip" id="tooltip"></div>
+</div>
+
+<script>
+const LAT = 40.8054, LON = -74.2074;
+const NWS_GRID_URL = 'https://api.weather.gov/gridpoints/OKX/26,45/forecast/hourly';
+const MODEL_KEYS = ['gfs_seamless','ecmwf_ifs025','icon_seamless','ukmo_seamless','gem_seamless'];
+const MODEL_KEY_MAP = {gfs_seamless:'gfs', ecmwf_ifs025:'ecmwf', icon_seamless:'icon', ukmo_seamless:'ukmo', gem_seamless:'gem'};
+
+const WMO_DESC = {
+  0:'Clear',1:'Mainly Clear',2:'Partly Cloudy',3:'Overcast',
+  45:'Fog',48:'Fog',51:'Light Drizzle',53:'Drizzle',55:'Dense Drizzle',
+  56:'Freezing Drizzle',57:'Freezing Drizzle',61:'Light Rain',63:'Rain',65:'Heavy Rain',
+  66:'Freezing Rain',67:'Freezing Rain',71:'Light Snow',73:'Snow',75:'Heavy Snow',
+  77:'Snow Grains',80:'Rain Showers',81:'Rain Showers',82:'Violent Showers',
+  85:'Snow Showers',86:'Snow Showers',95:'Thunderstorm',96:'Thunderstorm w/ Hail',99:'Thunderstorm w/ Hail'
+};
+
+const HOURS = Array.from({length:24}, (_,h) => String(h).padStart(2,'0')+':00');
+
+const SOURCES = [
+  {key:"nws",   name:"NWS (NDFD)",               slot:1},
+  {key:"om",    name:"Open-Meteo (Best Match)",  slot:2},
+  {key:"gfs",   name:"GFS (NOAA)",               slot:3},
+  {key:"ecmwf", name:"ECMWF",                    slot:4},
+  {key:"icon",  name:"ICON (DWD)",               slot:5},
+  {key:"ukmo",  name:"UKMO",                     slot:6},
+  {key:"gem",   name:"GEM (ECCC)",               slot:7}
+];
+
+let DATA = {}; // populated per fetch: DATA[key] = {temp:[24], precip:[24], cond:[24]}
+
+const root = document.getElementById('vizRoot');
+function colorFor(slot){
+  return getComputedStyle(root).getPropertyValue('--series-'+slot).trim();
+}
+
+function pad(n){ return String(n).padStart(2,'0'); }
+function toDateStr(d){ return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate()); }
+function addDays(d, n){ const c = new Date(d); c.setDate(c.getDate()+n); return c; }
+function friendlyDate(dateStr){
+  const [y,m,d] = dateStr.split('-').map(Number);
+  const dt = new Date(y, m-1, d);
+  return dt.toLocaleDateString(undefined, {weekday:'long', year:'numeric', month:'long', day:'numeric'});
+}
+
+// ---------- fetching ----------
+async function fetchNWS(dateStr){
+  const rows = {};
+  try{
+    const res = await fetch(NWS_GRID_URL, {headers:{Accept:'application/geo+json'}});
+    if (!res.ok) throw new Error('http '+res.status);
+    const json = await res.json();
+    json.properties.periods.forEach(p=>{
+      if (p.startTime.slice(0,10) === dateStr){
+        const hour = p.startTime.slice(11,16);
+        rows[hour] = {
+          temp: p.temperature,
+          precip: (p.probabilityOfPrecipitation && p.probabilityOfPrecipitation.value != null) ? p.probabilityOfPrecipitation.value : null,
+          cond: p.shortForecast
+        };
+      }
+    });
+  } catch(e){ console.warn('NWS fetch failed', e); }
+  return rows;
+}
+
+async function fetchModels(dateStr){
+  const out = {};
+  const modelsUrl = 'https://api.open-meteo.com/v1/forecast?latitude='+LAT+'&longitude='+LON+
+    '&hourly=temperature_2m,precipitation_probability,weathercode&models='+MODEL_KEYS.join(',')+
+    '&start_date='+dateStr+'&end_date='+dateStr+'&temperature_unit=fahrenheit&timezone=America%2FNew_York';
+  const bestMatchUrl = 'https://api.open-meteo.com/v1/forecast?latitude='+LAT+'&longitude='+LON+
+    '&hourly=temperature_2m,precipitation_probability,weathercode'+
+    '&start_date='+dateStr+'&end_date='+dateStr+'&temperature_unit=fahrenheit&timezone=America%2FNew_York';
+
+  try{
+    const res = await fetch(modelsUrl);
+    const json = await res.json();
+    if (!json.error && json.hourly){
+      json.hourly.time.forEach((t,i)=>{
+        const hour = t.slice(11,16);
+        Object.entries(MODEL_KEY_MAP).forEach(([mk,key])=>{
+          const temp = json.hourly['temperature_2m_'+mk] ? json.hourly['temperature_2m_'+mk][i] : undefined;
+          if (temp === undefined || temp === null) return;
+          const precip = json.hourly['precipitation_probability_'+mk] ? json.hourly['precipitation_probability_'+mk][i] : null;
+          const code = json.hourly['weathercode_'+mk] ? json.hourly['weathercode_'+mk][i] : null;
+          out[key] = out[key] || {};
+          out[key][hour] = {temp: Math.round(temp), precip: precip==null? null : precip, cond: WMO_DESC[code] || 'Unknown'};
+        });
+      });
+    }
+  } catch(e){ console.warn('models fetch failed', e); }
+
+  try{
+    const res2 = await fetch(bestMatchUrl);
+    const json2 = await res2.json();
+    if (!json2.error && json2.hourly){
+      out.om = {};
+      json2.hourly.time.forEach((t,i)=>{
+        const hour = t.slice(11,16);
+        out.om[hour] = {
+          temp: Math.round(json2.hourly.temperature_2m[i]),
+          precip: json2.hourly.precipitation_probability[i],
+          cond: WMO_DESC[json2.hourly.weathercode[i]] || 'Unknown'
+        };
+      });
+    }
+  } catch(e){ console.warn('best-match fetch failed', e); }
+
+  return out;
+}
+
+function assembleData(nwsRows, modelRows){
+  const data = {};
+  SOURCES.forEach(s=>{ data[s.key] = {temp:[], precip:[], cond:[]}; });
+  HOURS.forEach(h=>{
+    const n = nwsRows[h];
+    data.nws.temp.push(n ? n.temp : null);
+    data.nws.precip.push(n ? n.precip : null);
+    data.nws.cond.push(n ? n.cond : null);
+    ['om','gfs','ecmwf','icon','ukmo','gem'].forEach(k=>{
+      const r = modelRows[k] && modelRows[k][h];
+      data[k].temp.push(r ? r.temp : null);
+      data[k].precip.push(r ? r.precip : null);
+      data[k].cond.push(r ? r.cond : null);
+    });
+  });
+  return data;
+}
+
+function hasAny(arr){ return arr.some(v => v !== null && v !== undefined); }
+
+// ---------- stat tiles ----------
+function buildStats(availTemp, availPrecip){
+  const row = document.getElementById('statRow');
+  row.innerHTML = '';
+
+  if (!availTemp.length){
+    row.innerHTML = '<div class="stat-tile"><div class="stat-label">No data</div><div class="stat-note">None of the 7 models returned data for this date.</div></div>';
+    return;
+  }
+
+  const highs = availTemp.map(s => Math.max(...DATA[s.key].temp.filter(v=>v!==null)));
+  const lows  = availTemp.map(s => Math.min(...DATA[s.key].temp.filter(v=>v!==null)));
+  const avgHigh = Math.round(highs.reduce((a,b)=>a+b,0)/highs.length);
+  const avgLow  = Math.round(lows.reduce((a,b)=>a+b,0)/lows.length);
+  const minHigh = Math.min(...highs), maxHigh = Math.max(...highs);
+
+  const tiles = [
+    {label:'Consensus high', value: avgHigh+'°F', note:'range across '+availTemp.length+' models: '+minHigh+'–'+maxHigh+'°F'},
+    {label:'Consensus low', value: avgLow+'°F', note:'overnight low, all models'}
+  ];
+
+  if (availPrecip.length){
+    const peakPrecips = availPrecip.map(s => Math.max(...DATA[s.key].precip.filter(v=>v!==null)));
+    const avgPeakPrecip = Math.round(peakPrecips.reduce((a,b)=>a+b,0)/peakPrecips.length);
+    const majorityThreshold = Math.ceil(availPrecip.length/2)+ (availPrecip.length%2===0?0:0);
+    const need = Math.ceil((availPrecip.length+1)/2);
+    const rainHours = [];
+    HOURS.forEach((h,i)=>{
+      const vals = availPrecip.map(s=>DATA[s.key].precip[i]).filter(v=>v!==null);
+      const count = vals.filter(v=>v>=50).length;
+      if (count>=need) rainHours.push(h);
+    });
+    const rainWindow = rainHours.length ? rainHours[0]+'–'+rainHours[rainHours.length-1] : 'None';
+    tiles.push({label:'Peak rain chance', value: avgPeakPrecip+'%', note:'avg of per-model peaks ('+availPrecip.length+' models)'});
+    tiles.push({label:'Likely rain window', value: rainWindow, note:'hours where a majority show ≥50% chance'});
+  } else {
+    tiles.push({label:'Peak rain chance', value:'—', note:'no model returned precip data'});
+    tiles.push({label:'Likely rain window', value:'—', note:'no model returned precip data'});
+  }
+
+  tiles.forEach(t=>{
+    const div = document.createElement('div');
+    div.className='stat-tile';
+    const l = document.createElement('div'); l.className='stat-label'; l.textContent=t.label;
+    const v = document.createElement('div'); v.className='stat-value'; v.textContent=t.value;
+    const n = document.createElement('div'); n.className='stat-note'; n.textContent=t.note;
+    div.append(l,v,n);
+    row.appendChild(div);
+  });
+}
+
+// ---------- legend ----------
+function buildLegend(el, sources){
+  el.innerHTML = '';
+  sources.forEach(s=>{
+    const item = document.createElement('div'); item.className='legend-item';
+    const key = document.createElement('span'); key.className='legend-key';
+    key.style.background = colorFor(s.slot);
+    const label = document.createElement('span'); label.textContent = s.name;
+    item.append(key,label);
+    el.appendChild(item);
+  });
+}
+
+// ---------- chart builder ----------
+const NS = 'http://www.w3.org/2000/svg';
+function el(tag, attrs){
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  return e;
+}
+function niceMax(v, step){ return Math.ceil(v/step)*step; }
+function niceMin(v, step){ return Math.floor(v/step)*step; }
+
+function buildChart(svgEl, sources, field, opts){
+  svgEl.innerHTML = '';
+  let allVals = [];
+  sources.forEach(s => DATA[s.key][field].forEach(v => { if (v!==null) allVals.push(v); }));
+
+  if (!allVals.length){
+    return null;
+  }
+
+  const W = opts.width, H = opts.height;
+  const M = {top:10, right:14, bottom:26, left:36};
+  const plotW = W - M.left - M.right;
+  const plotH = H - M.top - M.bottom;
+
+  let yMin = opts.yMin !== undefined ? opts.yMin : niceMin(Math.min(...allVals), opts.step);
+  let yMax = opts.yMax !== undefined ? opts.yMax : niceMax(Math.max(...allVals), opts.step);
+  if (yMax - yMin < opts.step*2) yMax = yMin + opts.step*4;
+
+  const xScale = i => M.left + (i/(HOURS.length-1))*plotW;
+  const yScale = v => M.top + plotH - ((v-yMin)/(yMax-yMin))*plotH;
+
+  svgEl.setAttribute('viewBox', '0 0 '+W+' '+H);
+
+  const ticks = [];
+  for (let t=yMin; t<=yMax+0.001; t+=opts.step) ticks.push(t);
+  ticks.forEach(t=>{
+    const y = yScale(t);
+    svgEl.appendChild(el('line', {class:'gridline', x1:M.left, x2:W-M.right, y1:y, y2:y}));
+    const lbl = el('text', {class:'axis-label', x:M.left-8, y:y+3, 'text-anchor':'end'});
+    lbl.textContent = Math.round(t) + (opts.suffix||'');
+    svgEl.appendChild(lbl);
+  });
+
+  HOURS.forEach((h,i)=>{
+    if (i % 3 !== 0) return;
+    const x = xScale(i);
+    const lbl = el('text', {class:'axis-label', x:x, y:H-M.bottom+16, 'text-anchor':'middle'});
+    lbl.textContent = h;
+    svgEl.appendChild(lbl);
+  });
+  svgEl.appendChild(el('line', {class:'axis-line', x1:M.left, x2:W-M.right, y1:H-M.bottom, y2:H-M.bottom}));
+
+  sources.forEach(s=>{
+    const vals = DATA[s.key][field];
+    if (!hasAny(vals)) return;
+    let d = '';
+    let drawing = false;
+    vals.forEach((v,i)=>{
+      if (v===null){ drawing=false; return; }
+      const x = xScale(i), y = yScale(v);
+      d += (drawing? 'L':'M') + x.toFixed(1) + ',' + y.toFixed(1) + ' ';
+      drawing = true;
+    });
+    const path = el('path', {class:'series-line', d:d.trim(), stroke: colorFor(s.slot)});
+    svgEl.appendChild(path);
+    for (let i=vals.length-1;i>=0;i--){
+      if (vals[i]!==null){
+        const dot = el('circle', {class:'end-dot', cx:xScale(i), cy:yScale(vals[i]), r:4, fill: colorFor(s.slot)});
+        svgEl.appendChild(dot);
+        break;
+      }
+    }
+  });
+
+  return {xScale, yScale, M, plotW, plotH, W, H};
+}
+
+// ---------- crosshair + tooltip ----------
+const tooltip = document.getElementById('tooltip');
+function attachHover(svgEl, geom, sources){
+  if (!geom) return;
+  const hit = el('rect', {class:'hit-layer', x:geom.M.left, y:geom.M.top, width:geom.plotW, height:geom.plotH});
+  svgEl.appendChild(hit);
+  const cross = el('line', {class:'crosshair', x1:0, x2:0, y1:geom.M.top, y2:geom.H-geom.M.bottom, visibility:'hidden'});
+  svgEl.appendChild(cross);
+
+  function onMove(evt){
+    const rect = svgEl.getBoundingClientRect();
+    const scaleX = geom.W / rect.width;
+    const localX = (evt.clientX - rect.left) * scaleX;
+    let idx = Math.round(((localX - geom.M.left) / geom.plotW) * (HOURS.length-1));
+    idx = Math.max(0, Math.min(HOURS.length-1, idx));
+    const x = geom.xScale(idx);
+    cross.setAttribute('x1', x); cross.setAttribute('x2', x);
+    cross.setAttribute('visibility', 'visible');
+
+    tooltip.innerHTML = '';
+    const hourEl = document.createElement('div'); hourEl.className='t-hour'; hourEl.textContent = HOURS[idx];
+    tooltip.appendChild(hourEl);
+    sources.forEach(s=>{
+      const t = DATA[s.key].temp[idx];
+      if (t===null || t===undefined) return;
+      const row = document.createElement('div'); row.className='tooltip-row';
+      const key = document.createElement('span'); key.className='tooltip-key'; key.style.background = colorFor(s.slot);
+      const name = document.createElement('span'); name.className='tooltip-name'; name.textContent = s.name;
+      const p = DATA[s.key].precip[idx];
+      const c = DATA[s.key].cond[idx];
+      const val = document.createElement('span'); val.className='tooltip-val';
+      val.textContent = t+'°F · ' + (p===null||p===undefined? '—' : p+'%') + ' · ' + (c||'—');
+      row.append(key,name,val);
+      tooltip.appendChild(row);
+    });
+
+    const rootRect = root.getBoundingClientRect();
+    tooltip.style.left = (evt.clientX - rootRect.left + 16) + 'px';
+    tooltip.style.top = (evt.clientY - rootRect.top - 10) + 'px';
+    tooltip.classList.add('show');
+  }
+  function onLeave(){
+    cross.setAttribute('visibility','hidden');
+    tooltip.classList.remove('show');
+  }
+  hit.addEventListener('pointermove', onMove);
+  hit.addEventListener('pointerleave', onLeave);
+}
+
+// ---------- table view ----------
+function buildTable(sources){
+  const wrap = document.getElementById('tableWrap');
+  wrap.innerHTML = '';
+  const table = document.createElement('table');
+  const thead = document.createElement('thead');
+  const hr = document.createElement('tr');
+  const thHour = document.createElement('th'); thHour.textContent='Hour'; hr.appendChild(thHour);
+  sources.forEach(s=>{
+    const th = document.createElement('th'); th.colSpan=3; th.textContent = s.name;
+    hr.appendChild(th);
+  });
+  thead.appendChild(hr);
+  const hr2 = document.createElement('tr');
+  hr2.appendChild(document.createElement('th'));
+  sources.forEach(()=>{
+    ['°F','%','Cond'].forEach(lbl=>{
+      const th = document.createElement('th'); th.textContent = lbl; th.style.fontWeight='400'; th.style.fontSize='10.5px';
+      hr2.appendChild(th);
+    });
+  });
+  thead.appendChild(hr2);
+  table.appendChild(thead);
+
+  const tbody = document.createElement('tbody');
+  HOURS.forEach((h,i)=>{
+    const row = document.createElement('tr');
+    const tdH = document.createElement('td'); tdH.textContent = h; row.appendChild(tdH);
+    sources.forEach(s=>{
+      const t = DATA[s.key].temp[i];
+      const p = DATA[s.key].precip[i];
+      const c = DATA[s.key].cond[i];
+      const td1 = document.createElement('td'); td1.textContent = t===null||t===undefined? '—' : t;
+      const td2 = document.createElement('td'); td2.textContent = p===null||p===undefined? '—' : p;
+      const td3 = document.createElement('td'); td3.textContent = c || '—'; td3.style.textAlign='left';
+      row.append(td1,td2,td3);
+    });
+    tbody.appendChild(row);
+  });
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+}
+
+// ---------- render pipeline ----------
+function renderAll(currentDateStr){
+  const availTemp = SOURCES.filter(s => hasAny(DATA[s.key].temp));
+  const availPrecip = SOURCES.filter(s => hasAny(DATA[s.key].precip));
+  const unavailable = SOURCES.filter(s => !hasAny(DATA[s.key].temp)).map(s=>s.name);
+
+  document.getElementById('subtitle').textContent =
+    friendlyDate(currentDateStr) + ' — ' + availTemp.length + ' of 7 forecast models have data for this date' +
+    (unavailable.length ? ' (missing: '+unavailable.join(', ')+')' : '');
+
+  buildStats(availTemp, availPrecip);
+
+  document.getElementById('tempSub').textContent = '°F, by hour — ' + availTemp.length + ' model' + (availTemp.length===1?'':'s');
+  document.getElementById('precipSub').textContent = '% probability of precipitation, by hour — ' + availPrecip.length + ' model' + (availPrecip.length===1?'':'s');
+
+  buildLegend(document.getElementById('legendTemp'), availTemp);
+  buildLegend(document.getElementById('legendPrecip'), availPrecip);
+
+  const chartTempEl = document.getElementById('chartTemp');
+  const chartPrecipEl = document.getElementById('chartPrecip');
+  const parentTemp = chartTempEl.parentElement;
+  const parentPrecip = chartPrecipEl.parentElement;
+
+  removeNoDataMsg(parentTemp);
+  removeNoDataMsg(parentPrecip);
+
+  const tempGeom = buildChart(chartTempEl, availTemp, 'temp', {width:920, height:300, step:5, suffix:'°'});
+  if (!tempGeom) showNoDataMsg(parentTemp, chartTempEl, 'No temperature data available for this date.');
+  else attachHover(chartTempEl, tempGeom, availTemp);
+
+  const precipGeom = buildChart(chartPrecipEl, availPrecip, 'precip', {width:920, height:240, step:20, yMin:0, yMax:100, suffix:'%'});
+  if (!precipGeom) showNoDataMsg(parentPrecip, chartPrecipEl, 'No precipitation-probability data available for this date.');
+  else attachHover(chartPrecipEl, precipGeom, availPrecip);
+
+  buildTable(availTemp);
+}
+
+function showNoDataMsg(parent, svgEl, msg){
+  svgEl.style.display = 'none';
+  const div = document.createElement('div');
+  div.className = 'no-data-msg';
+  div.textContent = msg;
+  div.dataset.noDataMsg = 'true';
+  parent.appendChild(div);
+}
+function removeNoDataMsg(parent){
+  const existing = parent.querySelector('[data-no-data-msg]');
+  if (existing) existing.remove();
+  const svgEl = parent.querySelector('svg');
+  if (svgEl) svgEl.style.display = '';
+}
+
+// ---------- load orchestration ----------
+let loadSeq = 0;
+async function loadAndRender(dateStr){
+  const mySeq = ++loadSeq;
+  const status = document.getElementById('statusMsg');
+  status.textContent = 'Loading forecast…';
+  status.classList.remove('error');
+  try {
+    const [nwsRows, modelRows] = await Promise.all([fetchNWS(dateStr), fetchModels(dateStr)]);
+    if (mySeq !== loadSeq) return; // a newer request superseded this one
+    DATA = assembleData(nwsRows, modelRows);
+    renderAll(dateStr);
+    status.textContent = 'Updated ' + new Date().toLocaleTimeString();
+  } catch (e) {
+    if (mySeq !== loadSeq) return;
+    console.error(e);
+    status.textContent = 'Failed to load forecast data.';
+    status.classList.add('error');
+  }
+}
+
+function setDateAndLoad(dateStr, pushUrl){
+  document.getElementById('dateInput').value = dateStr;
+  if (pushUrl) {
+    const url = new URL(window.location.href);
+    url.searchParams.set('date', dateStr);
+    history.replaceState(null, '', url);
+  }
+  loadAndRender(dateStr);
+}
+
+document.getElementById('dateInput').addEventListener('change', function(){
+  setDateAndLoad(this.value, true);
+});
+document.getElementById('todayBtn').addEventListener('click', function(){
+  setDateAndLoad(toDateStr(new Date()), true);
+});
+document.getElementById('tomorrowBtn').addEventListener('click', function(){
+  setDateAndLoad(toDateStr(addDays(new Date(), 1)), true);
+});
+
+document.getElementById('toggleTable').addEventListener('click', function(){
+  const wrap = document.getElementById('tableWrap');
+  wrap.classList.toggle('show');
+  this.textContent = wrap.classList.contains('show') ? 'Hide data table' : 'Show data table';
+});
+
+// ---------- theme toggle ----------
+const themeBtn = document.getElementById('themeToggle');
+themeBtn.addEventListener('click', function(){
+  const current = document.documentElement.getAttribute('data-theme');
+  const next = current === 'dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  themeBtn.textContent = next === 'dark' ? 'Light mode' : 'Dark mode';
+  renderAll(document.getElementById('dateInput').value);
+});
+
+// ---------- init ----------
+(function init(){
+  const params = new URLSearchParams(window.location.search);
+  const initialDate = params.get('date') || toDateStr(addDays(new Date(), 1));
+  document.getElementById('dateInput').value = initialDate;
+  loadAndRender(initialDate);
+})();
+</script>
+</body>
+</html>
